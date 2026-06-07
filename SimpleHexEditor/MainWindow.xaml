@@ -78,10 +78,10 @@
 
                         <StackPanel Orientation="Vertical">
                             <StackPanel Style="{StaticResource InputRow}">
-                                <Button Content="Open File" Click="OnOpenFile" Width="135" />
-                                <Button Content="Reload File" Click="OnReloadFile" Width="135" />
-                                <Button Content="Save Changes" Click="OnSaveFile" Width="135" />
-                                <Button Content="Export Hex Dump" Click="OnExportHexDump" Width="135" />
+                                <Button x:Name="OpenFileButton" Content="Open File" Click="OnOpenFile" Width="135" />
+                                <Button x:Name="ReloadFileButton" Content="Reload File" Click="OnReloadFile" Width="135" />
+                                <Button x:Name="SaveButton" Content="Save Changes" Click="OnSaveFile" Width="135" />
+                                <Button x:Name="ExportDumpButton" Content="Export Hex Dump" Click="OnExportHexDump" Width="135" />
                             </StackPanel>
                             <Separator Margin="0,8,0,10" />
                             <StackPanel Style="{StaticResource InputRow}">
@@ -103,9 +103,9 @@
                                 <TextBlock Text="Edit byte @offset:" VerticalAlignment="Center" Width="130" />
                                 <TextBox x:Name="EditOffsetText" Width="150" Margin="0,0,8,0" />
                                 <TextBox x:Name="EditHexValueText" Width="90" Margin="0,0,8,0" />
-                                <Button Content="Apply" Click="OnApplyByteEdit" Width="85" />
-                                <Button Content="Undo" Click="OnUndoEdit" Width="85" />
-                                <Button Content="Redo" Click="OnRedoEdit" Width="85" />
+                                <Button x:Name="ApplyEditButton" Content="Apply" Click="OnApplyByteEdit" Width="85" />
+                                <Button x:Name="UndoButton" Content="Undo" Click="OnUndoEdit" Width="85" />
+                                <Button x:Name="RedoButton" Content="Redo" Click="OnRedoEdit" Width="85" />
                             </StackPanel>
                             <StackPanel Style="{StaticResource InputRow}">
                                 <CheckBox x:Name="DiffModeEnabled" Content="Diff mode" VerticalAlignment="Center" Margin="0,0,18,0" IsChecked="True" Checked="OnDiffModeToggled" Unchecked="OnDiffModeToggled" />
@@ -113,9 +113,9 @@
                             <StackPanel Style="{StaticResource InputRow}">
                                 <TextBlock Text="Bookmark offset:" VerticalAlignment="Center" Width="130" />
                                 <TextBox x:Name="BookmarkText" Width="150" Margin="0,0,8,0" />
-                                <Button Content="Add" Click="OnAddBookmark" Width="85" />
-                                <Button Content="Remove" Click="OnRemoveBookmark" Width="85" />
-                                <Button Content="Jump" Click="OnGotoBookmark" Width="85" />
+                                <Button x:Name="AddBookmarkButton" Content="Add" Click="OnAddBookmark" Width="85" />
+                                <Button x:Name="RemoveBookmarkButton" Content="Remove" Click="OnRemoveBookmark" Width="85" />
+                                <Button x:Name="GotoBookmarkButton" Content="Jump" Click="OnGotoBookmark" Width="85" />
                             </StackPanel>
                             <StackPanel Style="{StaticResource InputRow}">
                                 <Button Content="Compute Checksums" Click="OnComputeChecksums" Width="145" />
@@ -174,7 +174,7 @@
             <Border Grid.Column="1" Style="{StaticResource PanelCard}" Margin="18,0,0,0">
                 <StackPanel>
                     <TextBlock Text="File info" FontSize="18" FontWeight="SemiBold" Foreground="#0F172A" Margin="0,0,0,10" />
-                    <TextBlock Text="Load target file and inspect byte layout in 16-byte chunks." Style="{StaticResource FeatureText}" />
+                    <TextBlock Text="Load a file and inspect byte layout in 16-byte chunks." Style="{StaticResource FeatureText}" />
                     <TextBlock Text="Search hex patterns, navigate by offset, and jump directly to matches." Style="{StaticResource FeatureText}" />
                     <TextBlock Text="Edit a byte directly by offset, then save and create a reproducible dump." Style="{StaticResource FeatureText}" />
                     <TextBlock Text="Bookmark offsets that matter (headers, signatures, metadata offsets) and return quickly." Style="{StaticResource FeatureText}" />
@@ -185,6 +185,14 @@
                     <TextBlock x:Name="FileMetricsText" Text="—" Foreground="#475569" TextWrapping="Wrap" Margin="0,0,0,12" />
                     <TextBlock Text="Selection / checksum status:" FontWeight="SemiBold" />
                     <TextBlock x:Name="SelectionText" Text="No selection." Foreground="#475569" TextWrapping="Wrap" />
+                    <Separator Margin="0,10,0,10" />
+                    <TextBlock Text="License / trial status:" FontWeight="SemiBold" />
+                    <TextBlock x:Name="LicenseStatusText" Text="Trial status unknown." Foreground="#0F172A" Margin="0,0,0,6" />
+                    <TextBlock x:Name="TrialRemainingText" Text="—" Foreground="#334155" Margin="0,0,0,10" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                        <Button x:Name="ViewLogsButton" Content="View Logs" Click="OnViewLogs" Width="110" />
+                        <Button x:Name="AboutButton" Content="About" Click="OnShowAbout" Width="110" />
+                    </StackPanel>
                     <TextBlock Text="Undo / Redo:" FontWeight="SemiBold" Margin="0,10,0,0" />
                     <TextBlock x:Name="UndoRedoText" Text="Undo: 0, Redo: 0" Foreground="#475569" />
                 </StackPanel>

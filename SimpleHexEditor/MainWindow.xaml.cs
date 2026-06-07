@@ -3,12 +3,14 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using Microsoft.Win32;
-using System.Security.Cryptography;
-using System.Text;
 
 namespace SimpleHexEditor;
 
@@ -25,14 +27,41 @@ public partial class MainWindow : Window
     private readonly Stack<ByteEdit> _undoStack = [];
     private readonly Stack<ByteEdit> _redoStack = [];
     private readonly HashSet<int> _modifiedOffsets = [];
+    private readonly TrialManager _trialManager = new();
+    private readonly HexAppLogger _logger;
+
+    private static readonly string TrialAppStatePath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "SimpleHexEditor",
+        "license.json");
 
     public MainWindow()
     {
         InitializeComponent();
+        _logger = new HexAppLogger(
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "SimpleHexEditor",
+                "logs"));
+
+        _trialManager.Load(TrialAppStatePath);
         ByteGrid.ItemsSource = _lines;
         RefreshUiState();
         UpdateUndoRedoStatus();
+        UpdateTrialUiState();
+        UpdateTrialText();
         SetStatus("Load a file to begin.");
+        _logger.Log("app_start", $"Version={GetType().Assembly.GetName().Version}");
+
+        var args = Environment.GetCommandLineArgs();
+        if (args.Any(a => a.Equals("--show-about", StringComparison.OrdinalIgnoreCase)))
+        {
+            Dispatcher.BeginInvoke(new Action(() => OnShowAbout(this, new RoutedEventArgs())));
+        }
+        if (args.Any(a => a.Equals("--show-logs", StringComparison.OrdinalIgnoreCase)))
+        {
+            Dispatcher.BeginInvoke(new Action(() => OnViewLogs(this, new RoutedEventArgs())));
+        }
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
@@ -58,6 +87,12 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.L)
+        {
+            OnViewLogs(this, new RoutedEventArgs());
+            e.Handled = true;
+        }
+
         base.OnKeyDown(e);
     }
 
@@ -68,6 +103,7 @@ public partial class MainWindow : Window
             return;
 
         LoadFile(dlg.FileName);
+        _logger.Log("open_file", dlg.FileName);
     }
 
     private void OnReloadFile(object sender, RoutedEventArgs e)
@@ -80,10 +116,14 @@ public partial class MainWindow : Window
 
         LoadFile(_currentFilePath);
         SetStatus("Reloaded file.");
+        _logger.Log("reload_file", _currentFilePath);
     }
 
     private void OnSaveFile(object sender, RoutedEventArgs e)
     {
+        if (!EnsureTrialOperationAllowed("Save changes"))
+            return;
+
         if (string.IsNullOrWhiteSpace(_currentFilePath))
         {
             SetStatus("No file loaded.");
@@ -104,10 +144,14 @@ public partial class MainWindow : Window
         RebuildRows();
         UpdateUndoRedoStatus();
         SetStatus($"Saved {dlg.FileName}");
+        _logger.Log("save_file", dlg.FileName);
     }
 
     private void OnExportHexDump(object sender, RoutedEventArgs e)
     {
+        if (!EnsureTrialOperationAllowed("Export hex dump"))
+            return;
+
         if (_data.Length == 0)
         {
             SetStatus("No file loaded.");
@@ -129,6 +173,7 @@ public partial class MainWindow : Window
 
         File.WriteAllLines(dlg.FileName, lines);
         SetStatus($"Exported hex dump: {dlg.FileName}");
+        _logger.Log("export_dump", dlg.FileName);
     }
 
     private void OnFindBytes(object sender, RoutedEventArgs e)
@@ -188,6 +233,7 @@ public partial class MainWindow : Window
             ByteGrid.ScrollIntoView(_lines[_matchOffsets[0] / 16]);
             MatchInfo.Text = $"{_matchOffsets.Count} match(es), showing {0 + 1}.";
             SetStatus($"Found {_matchOffsets.Count} match(es).");
+            _logger.Log("find_bytes", $"query={SearchText.Text};count={_matchOffsets.Count}");
         }
         else
         {
@@ -254,6 +300,7 @@ public partial class MainWindow : Window
 
         Clipboard.SetText(_lines[_selectedOffset / 16].HexText);
         SetStatus("Copied row hex data.");
+        _logger.Log("copy_row", $"offset=0x{_selectedOffset:X}");
     }
 
     private void OnCopySelection(object sender, RoutedEventArgs e)
@@ -264,15 +311,19 @@ public partial class MainWindow : Window
             return;
         }
 
-        var line = ByteGrid.SelectedItem as HexLine;
-        if (line is null) return;
+        if (ByteGrid.SelectedItem is not HexLine line)
+            return;
 
         Clipboard.SetText($"{line.OffsetText}\t{line.HexText}\t{line.AsciiText}");
         SetStatus("Copied selected row with offset and ASCII.");
+        _logger.Log("copy_selection", line.OffsetText);
     }
 
     private void OnApplyByteEdit(object sender, RoutedEventArgs e)
     {
+        if (!EnsureTrialOperationAllowed("Edit bytes"))
+            return;
+
         if (_data.Length == 0)
         {
             SetStatus("No file loaded.");
@@ -292,18 +343,28 @@ public partial class MainWindow : Window
         }
 
         var oldValue = _data[offset];
+        if (oldValue == value)
+        {
+            SetStatus($"No change: offset already at 0x{value:X2}.");
+            return;
+        }
+
         _data[offset] = value;
-        SetModified(offset, oldValue, value);
         _undoStack.Push(new ByteEdit(offset, oldValue, value));
         _redoStack.Clear();
+        SetModified(offset, oldValue, value);
         RefreshSingleLine(offset);
         UpdateUndoRedoStatus();
         SelectionText.Text = $"Edited byte at offset {offset} (0x{offset:X}) to 0x{value:X2}.";
         SetStatus("Byte edit applied.");
+        _logger.Log("edit_byte", $"offset=0x{offset:X};from=0x{oldValue:X2};to=0x{value:X2}");
     }
 
     private void OnUndoEdit(object sender, RoutedEventArgs e)
     {
+        if (!EnsureTrialOperationAllowed("Undo"))
+            return;
+
         if (_undoStack.Count == 0)
         {
             SetStatus("Nothing to undo.");
@@ -313,16 +374,20 @@ public partial class MainWindow : Window
         var edit = _undoStack.Pop();
         var current = _data[edit.Offset];
         _data[edit.Offset] = edit.OldValue;
-        SetModified(edit.Offset, current, edit.OldValue);
         _redoStack.Push(new ByteEdit(edit.Offset, current, edit.OldValue));
+        SetModified(edit.Offset, current, edit.OldValue);
         RefreshSingleLine(edit.Offset);
         UpdateUndoRedoStatus();
         SelectionText.Text = $"Undo: restored offset 0x{edit.Offset:X} to 0x{edit.OldValue:X2}.";
         SetStatus("Undo completed.");
+        _logger.Log("undo", $"offset=0x{edit.Offset:X};to=0x{edit.OldValue:X2}");
     }
 
     private void OnRedoEdit(object sender, RoutedEventArgs e)
     {
+        if (!EnsureTrialOperationAllowed("Redo"))
+            return;
+
         if (_redoStack.Count == 0)
         {
             SetStatus("Nothing to redo.");
@@ -332,30 +397,35 @@ public partial class MainWindow : Window
         var edit = _redoStack.Pop();
         var current = _data[edit.Offset];
         _data[edit.Offset] = edit.NewValue;
-        SetModified(edit.Offset, current, edit.NewValue);
         _undoStack.Push(new ByteEdit(edit.Offset, current, edit.NewValue));
+        SetModified(edit.Offset, current, edit.NewValue);
         RefreshSingleLine(edit.Offset);
         UpdateUndoRedoStatus();
         SelectionText.Text = $"Redo: changed offset 0x{edit.Offset:X} to 0x{edit.NewValue:X2}.";
         SetStatus("Redo completed.");
+        _logger.Log("redo", $"offset=0x{edit.Offset:X};to=0x{edit.NewValue:X2}");
     }
 
     private void OnOpenSampleFile(object sender, RoutedEventArgs e)
     {
+        if (!EnsureTrialOperationAllowed("Open sample file"))
+            return;
+
         var temp = Path.Combine(Path.GetTempPath(), "SimpleHexEditor_Sample.bin");
         byte[] sample = [
-            0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00, // DOS header start
+            0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00,
             0x46, 0x4F, 0x4F, 0x20, 0x48, 0x45, 0x58, 0x21,
             0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80,
             0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04,
             0x53, 0x69, 0x6D, 0x70, 0x6C, 0x65, 0x20, 0x48,
             0x65, 0x78, 0x20, 0x45, 0x64, 0x69, 0x74, 0x6F,
-            0x72, 0x0A, 0x53, 0x61, 0x6D, 0x70, 0x6C, 0x65, 
+            0x72, 0x0A, 0x53, 0x61, 0x6D, 0x70, 0x6C, 0x65,
             0x20, 0x4D, 0x65, 0x6D, 0x6F, 0x72, 0x79, 0x0A
         ];
         File.WriteAllBytes(temp, sample);
         LoadFile(temp);
         SetStatus("Loaded sample file.");
+        _logger.Log("load_sample", temp);
     }
 
     private void OnDiffModeToggled(object sender, RoutedEventArgs e)
@@ -365,6 +435,9 @@ public partial class MainWindow : Window
 
     private void OnAddBookmark(object sender, RoutedEventArgs e)
     {
+        if (!EnsureTrialOperationAllowed("Add bookmark"))
+            return;
+
         if (!TryParseOffset(BookmarkText.Text, out int offset) || offset < 0 || offset >= _data.Length)
         {
             SetStatus("Bookmark offset invalid.");
@@ -376,6 +449,7 @@ public partial class MainWindow : Window
             _lines[offset / 16].IsBookmarked = true;
             RefreshBookmarks();
             SetStatus($"Bookmark added: 0x{offset:X}");
+            _logger.Log("add_bookmark", $"offset=0x{offset:X}");
         }
         else
         {
@@ -385,6 +459,9 @@ public partial class MainWindow : Window
 
     private void OnRemoveBookmark(object sender, RoutedEventArgs e)
     {
+        if (!EnsureTrialOperationAllowed("Remove bookmark"))
+            return;
+
         if (!TryParseOffset(BookmarkText.Text, out int offset) || offset < 0 || offset >= _data.Length)
         {
             SetStatus("Bookmark offset invalid.");
@@ -400,6 +477,7 @@ public partial class MainWindow : Window
 
             RefreshBookmarks();
             SetStatus($"Bookmark removed: 0x{offset:X}");
+            _logger.Log("remove_bookmark", $"offset=0x{offset:X}");
         }
         else
         {
@@ -448,10 +526,14 @@ public partial class MainWindow : Window
         var shaHex = Convert.ToHexString(hash);
         SelectionText.Text = $"CRC-32: 0x{crc32:X8}    SHA-256: {shaHex}";
         SetStatus("Checksums computed.");
+        _logger.Log("compute_checksums", $"crc32=0x{crc32:X8};sha256len={hash.Length}");
     }
 
     private void OnClearWorkspace(object sender, RoutedEventArgs e)
     {
+        if (!EnsureTrialOperationAllowed("Clear workspace"))
+            return;
+
         _data = [];
         _currentFilePath = string.Empty;
         _baselineData = [];
@@ -469,6 +551,7 @@ public partial class MainWindow : Window
         SelectionText.Text = "No selection.";
         UpdateUndoRedoStatus();
         SetStatus("Workspace cleared.");
+        _logger.Log("clear_workspace");
     }
 
     private void OnSelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -481,6 +564,21 @@ public partial class MainWindow : Window
         int displayedCount = Math.Min(16, Math.Max(0, _data.Length - _selectedOffset));
         SelectionText.Text = $"Row start: 0x{_selectedOffset:X} ({_selectedOffset}), selected bytes: {displayedCount}";
         EditOffsetText.Text = _selectedOffset.ToString(CultureInfo.InvariantCulture);
+    }
+
+    private void OnViewLogs(object sender, RoutedEventArgs e)
+    {
+        var viewer = new LogViewerWindow(_logger.LogPath);
+        viewer.Owner = this;
+        viewer.ShowDialog();
+        _logger.Log("view_logs");
+    }
+
+    private void OnShowAbout(object sender, RoutedEventArgs e)
+    {
+        var about = new AboutWindow(_trialManager, GetType().Assembly.GetName().Version?.ToString() ?? "1.0.0");
+        about.Owner = this;
+        about.ShowDialog();
     }
 
     private void LoadFile(string path)
@@ -501,7 +599,8 @@ public partial class MainWindow : Window
         FileMetricsText.Text = $"{_data.Length:N0} bytes | MD5: {ComputeMd5(_data)} | UTF-8 starts: {_data.Take(8).TakeWhile(b => b >= 32 && b <= 126).Count()} printable";
         RefreshBookmarks();
         UpdateUndoRedoStatus();
-        SetStatus($"Loaded {_data.Length:N0} bytes.");
+        UpdateTrialUiState();
+        _logger.Log("load_file", path);
     }
 
     private void BuildRows()
@@ -619,7 +718,10 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(text))
             return false;
 
-        var trimmed = text.Trim().TrimStart('0', 'x', 'X');
+        var trimmed = text.Trim();
+        if (trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            trimmed = trimmed[2..];
+
         return byte.TryParse(trimmed, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out value);
     }
 
@@ -659,11 +761,136 @@ public partial class MainWindow : Window
         UndoRedoText.Text = $"Undo: {_undoStack.Count}, Redo: {_redoStack.Count}";
     }
 
+    private void UpdateTrialText()
+    {
+        LicenseStatusText.Text = _trialManager.IsFullVersion
+            ? "License: Full"
+            : $"License: Trial ({_trialManager.DaysRemaining} days left)";
+        TrialRemainingText.Text = _trialManager.IsFullVersion
+            ? "No trial limit. Purchasable upgrade available: $1.99 USD"
+            : $"Trial started {_trialManager.StartDate:yyyy-MM-dd}, expires {_trialManager.EndDate:yyyy-MM-dd}";
+    }
+
+    private void UpdateTrialUiState()
+    {
+        bool canUseMutatingActions = _trialManager.CanEdit;
+        SaveButton.IsEnabled = canUseMutatingActions;
+        ExportDumpButton.IsEnabled = canUseMutatingActions;
+        ApplyEditButton.IsEnabled = canUseMutatingActions;
+        UndoButton.IsEnabled = canUseMutatingActions;
+        RedoButton.IsEnabled = canUseMutatingActions;
+        AddBookmarkButton.IsEnabled = canUseMutatingActions;
+        RemoveBookmarkButton.IsEnabled = canUseMutatingActions;
+        GotoBookmarkButton.IsEnabled = _data.Length > 0;
+        OpenFileButton.IsEnabled = true;
+        ReloadFileButton.IsEnabled = !string.IsNullOrWhiteSpace(_currentFilePath);
+
+        if (!canUseMutatingActions && !_trialManager.IsFullVersion)
+        {
+            var warning = "Trial expired; reopen app after activation. Open file, search, copy, and inspect are still available in trial."
+;
+            SetStatus(warning);
+        }
+        UpdateTrialText();
+    }
+
+    private bool EnsureTrialOperationAllowed(string actionLabel)
+    {
+        if (_trialManager.CanEdit)
+            return true;
+
+        SetStatus($"Action blocked by trial: {actionLabel}. The 15-day trial has ended.");
+        return false;
+    }
+
     private void SetStatus(string message)
     {
         StatusText.Text = message;
-        FileMetricsText.Text = $"Status: {message}";
     }
+}
+
+public sealed class HexAppLogger
+{
+    public string LogPath { get; }
+    private readonly object _sync = new();
+
+    public HexAppLogger(string logDirectory)
+    {
+        Directory.CreateDirectory(logDirectory);
+        LogPath = Path.Combine(logDirectory, "app.log");
+    }
+
+    public void Log(string action, string details = "")
+    {
+        var line = $"[{DateTimeOffset.UtcNow:O}] {action}" + (string.IsNullOrWhiteSpace(details) ? string.Empty : $" - {details}");
+        lock (_sync)
+        {
+            File.AppendAllText(LogPath, line + Environment.NewLine, Encoding.UTF8);
+        }
+    }
+}
+
+public sealed class TrialManager
+{
+    public DateTime StartDate { get; set; } = DateTime.UtcNow;
+    public bool IsFullVersion { get; set; }
+    public int DaysRemaining { get; private set; }
+    public DateTime EndDate => StartDate.AddDays(15);
+    public bool CanEdit => IsFullVersion || DateTime.UtcNow <= EndDate;
+
+    public void Load(string filePath)
+    {
+        if (!File.Exists(filePath))
+        {
+            Persist(filePath);
+            UpdateDays();
+            return;
+        }
+
+        try
+        {
+            var json = File.ReadAllText(filePath);
+            var state = JsonSerializer.Deserialize<TrialState>(json);
+            if (state is null)
+            {
+                Persist(filePath);
+            }
+            else
+            {
+                StartDate = state.StartDate;
+                IsFullVersion = state.IsFullVersion;
+            }
+        }
+        catch
+        {
+            Persist(filePath);
+        }
+
+        UpdateDays();
+    }
+
+    private void Persist(string filePath)
+    {
+        var state = new TrialState
+        {
+            StartDate = StartDate,
+            IsFullVersion = IsFullVersion
+        };
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+        File.WriteAllText(filePath, JsonSerializer.Serialize(state));
+    }
+
+    private void UpdateDays()
+    {
+        var remaining = (EndDate.Date - DateTime.UtcNow.Date).Days;
+        DaysRemaining = Math.Max(0, remaining);
+    }
+}
+
+public sealed record TrialState
+{
+    public DateTime StartDate { get; init; } = DateTime.UtcNow;
+    public bool IsFullVersion { get; init; } = false;
 }
 
 public sealed record ByteEdit(int Offset, byte OldValue, byte NewValue);

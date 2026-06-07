@@ -1,0 +1,35 @@
+<Window x:Class="SimpleHexEditor.AboutWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="About Simple Hex Editor"
+        Width="720"
+        Height="520"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="24">
+        <StackPanel>
+            <TextBlock Text="Simple Hex Editor" FontSize="28" FontWeight="Bold" />
+            <TextBlock Text="Version" FontSize="12" Foreground="#64748B" />
+            <TextBlock x:Name="VersionText" FontWeight="SemiBold" Margin="0,0,0,12" />
+            <TextBlock Text="License" FontSize="12" Foreground="#64748B" />
+            <TextBlock x:Name="LicenseText" FontWeight="SemiBold" Margin="0,0,0,12" />
+            <TextBlock Text="Usage" FontSize="12" Foreground="#64748B" />
+            <TextBlock TextWrapping="Wrap" FontSize="14">
+                <Run Text="1) Open a file with Open File. " />
+                <Run Text="2) Jump to offsets with Goto Offset and search for patterns using Find/Next. " />
+                <Run Text="3) Edit byte values by offset, then save the result using Save Changes. " />
+                <Run Text="4) Export a report with Export Hex Dump for sharing. " />
+                <Run Text="5) Add bookmarks to keep important byte positions in a session. " />
+            </TextBlock>
+            <Separator Margin="0,12,0,12" />
+            <TextBlock Text="What counts as full release features" FontWeight="SemiBold" />
+            <TextBlock TextWrapping="Wrap">
+                The core feature set is local and fully available in-app for 15 days.
+                After trial expiry, editing actions are locked until full licensing is enabled.
+            </TextBlock>
+            <Separator Margin="0,12,0,12" />
+            <TextBlock Text="Store plan" FontWeight="SemiBold" />
+            <TextBlock TextWrapping="Wrap" Text="Pro pricing: $1.99 USD for full unlimited use." />
+            <Button Content="Close" Width="130" Margin="0,20,0,0" Click="OnClose" />
+        </StackPanel>
+    </Grid>
+</Window>
